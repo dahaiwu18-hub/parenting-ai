@@ -427,6 +427,9 @@ function loadKB(){
       KB = data;
       document.getElementById('loader').style.display='none';
       console.log('KB loaded:',KB.meta.total_chunks,'chunks');
+      // 恢复上次的对话历史
+      window._savingHistory = true;
+      restoreMessageHistory();
     })
     .catch(()=>{
       document.getElementById('loader').innerHTML='<p style="color:var(--warn)">知识库加载失败，请刷新重试</p>';
@@ -518,6 +521,53 @@ function clearContext(){
   document.getElementById('ctxIndicator').classList.remove('show');
 }
 
+// ==================== 对话历史持久化 ====================
+function saveMessageHistory(){
+  const msgs = [];
+  // 只保存 .msg 元素，跳过初始欢迎语（无 _msgData 的 old bot msg）
+  messagesDiv.querySelectorAll('.msg').forEach(el=>{
+    if(el._msgData){
+      msgs.push(el._msgData);
+    }
+  });
+  if(msgs.length>0){
+    try{localStorage.setItem('parenting_chat_history',JSON.stringify(msgs));}catch(e){}
+  }
+  // 同时保存上下文
+  if(conversationCtx.length>0){
+    try{localStorage.setItem('parenting_chat_ctx',JSON.stringify(conversationCtx));}catch(e){}
+  }
+}
+
+function restoreMessageHistory(){
+  let msgs = [];
+  try{msgs = JSON.parse(localStorage.getItem('parenting_chat_history')||'[]');}catch(e){}
+  let ctx = [];
+  try{ctx = JSON.parse(localStorage.getItem('parenting_chat_ctx')||'[]');}catch(e){}
+  if(msgs.length===0 && ctx.length===0) return;
+
+  // 恢复上下文
+  conversationCtx = ctx;
+  if(conversationCtx.length>=2){
+    const rounds = Math.floor(conversationCtx.length/2);
+    messagePairs = rounds;
+    document.getElementById('ctxIndicator').classList.add('show');
+    document.getElementById('ctxIndicator').textContent = '💬 已记住 '+rounds+' 轮对话上下文';
+  }
+
+  // 恢复消息DOM（跳过 _savingHistory 避免重复保存）
+  window._savingHistory = false;
+  for(const m of msgs){
+    addMessage(m.type, m.content, m.sources, m.extra);
+  }
+  window._savingHistory = true;
+}
+
+function clearHistoryStorage(){
+  localStorage.removeItem('parenting_chat_history');
+  localStorage.removeItem('parenting_chat_ctx');
+}
+
 // ==================== 清除对话菜单 ====================
 function showClearMenu(){
   const rounds = messagePairs;
@@ -585,6 +635,12 @@ function clearMessages(action, totalRounds){
   const pairsToRemove = Math.min(count, ctxPairs);
   conversationCtx = conversationCtx.slice(0, conversationCtx.length - pairsToRemove*2);
   updateCtxIndicator();
+  // 同步清除持久化的历史
+  if(conversationCtx.length===0){
+    clearHistoryStorage();
+  } else {
+    saveMessageHistory();
+  }
 }
 
 function updateCtxIndicator(){
@@ -907,14 +963,22 @@ function addMessage(type, content, sources, extra){
         </div>`:''}
       </div>`;
     div._sources = sources;
+    div._msgData = {type, content, sources, extra};
   } else if(type==='bot' && extra==='clarify'){
     div.innerHTML = `<div class="bubble"><strong>为了更好地帮到你，请补充以下信息：</strong><br><br>${content}<br><br><em>（直接输入补充信息即可，我会结合上下文一起回答）</em></div>`;
+    div._msgData = {type, content, sources, extra};
   } else {
     div.innerHTML = `<div class="bubble">${typeof content==='string'?content:content.text||''}</div>`;
+    div._msgData = {type, content, sources, extra};
   }
 
   messagesDiv.appendChild(div);
   messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+  // 持久化：对话历史保存到localStorage（跳过初始欢迎语）
+  if(window._savingHistory!==false){
+    saveMessageHistory();
+  }
   return div;
 }
 

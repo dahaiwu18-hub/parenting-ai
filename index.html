@@ -392,6 +392,25 @@ document.getElementById('camBtn').addEventListener('click', ()=>{
   document.getElementById('fileInput').click();
 });
 
+// ==================== 错题集日志 ====================
+function logIssue(category, query, detail){
+  try{
+    const raw = localStorage.getItem('parenting_issues_log')||'[]';
+    const issues = JSON.parse(raw);
+    issues.push({
+      id: Date.now(),
+      time: new Date().toISOString().replace('T',' ').substring(0,19),
+      category: category,   // 'kb_miss'|'ai_error'|'ocr_fail'|'safety_block'|'other'
+      query: query||'',
+      detail: detail||'',
+      resolved: false
+    });
+    // 上限300条，防止撑满localStorage
+    if(issues.length>300) issues.splice(0, issues.length-300);
+    localStorage.setItem('parenting_issues_log', JSON.stringify(issues));
+  }catch(e){}
+}
+
 // ==================== 知识库引擎 ====================
 let KB = null;
 const BM25_K1 = 1.2, BM25_B = 0.75, AVG_DL = 500;
@@ -976,6 +995,7 @@ async function sendMessage(){
 
       if(aiResp.error){
         removeTyping();
+        logIssue('ai_error', finalQuery, aiResp.error);
         const fallback = formatFallbackAnswer(dual);
         addToCtx('assistant', fallback.text);
         addMessage('bot', {text:fallback.text,aiGenerated:false}, fallback.sources);
@@ -988,6 +1008,7 @@ async function sendMessage(){
       }
     }catch(e){
       removeTyping();
+      logIssue('ai_error', finalQuery, e.message||'AI网络异常');
       const fallback = formatFallbackAnswer(dual);
       addToCtx('assistant', fallback.text);
       addMessage('bot', {text:fallback.text,aiGenerated:false}, fallback.sources);
@@ -1009,6 +1030,7 @@ function formatFallbackAnswer(dual){
   const hasO = dual.official.length>0;
   const hasB = dual.books.length>0;
   if(!hasO && !hasB){
+    logIssue('kb_miss', finalQuery, '官方指南和书籍均无匹配结果');
     return {text:'抱歉，我在知识库中没有找到相关的内容 😔\n\n你可以换个方式描述问题，或者告诉我更具体的情况。',sources:[]};
   }
 
@@ -1111,12 +1133,14 @@ function handleImageFile(event){
       const {data:{text}} = await worker.recognize(dataUrl);
       lastOcrText = text.trim();
       if(!lastOcrText){
+        logIssue('ocr_fail', 'OCR识别', '图片中未检测到文字');
         showOcrResult('⚠️ 未能识别到文字\n\n请确保图片光线充足、文字清晰，或尝试手动输入。');
       } else {
         showOcrResult(lastOcrText);
       }
     }catch(err){
       console.error('OCR error:',err);
+      logIssue('ocr_fail', 'OCR识别', err.message||'OCR引擎异常');
       showOcrResult('⚠️ OCR识别失败: '+err.message+'\n\n请重试或手动输入。');
     }
   };

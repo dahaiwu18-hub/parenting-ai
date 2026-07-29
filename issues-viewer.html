@@ -1,0 +1,256 @@
+<!-- 育儿AI问答助手 · 错题集 · 本地查看器 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>错题集 - 育儿AI问答助手</title>
+<style>
+:root{--bg:#FFFBF5;--bg2:#FFF3E4;--ink:#2D2B28;--muted:#8B7E6E;--rule:#E8D5C0;--accent:#E8836B;--accent2:#5B9E8C;--warn:#D94A3A}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,'Noto Sans CJK SC',sans-serif;background:var(--bg);color:var(--ink);line-height:1.8;max-width:900px;margin:0 auto;padding:2rem 1.5rem}
+h1{font-size:1.6rem;margin-bottom:.2rem}
+.sub{font-size:.85rem;color:var(--muted);margin-bottom:1.5rem}
+
+/* Stats */
+.stats{display:flex;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap}
+.stat-card{flex:1;min-width:120px;background:var(--bg2);border-radius:12px;padding:1rem;text-align:center;border-left:4px solid var(--rule)}
+.stat-card .num{font-size:2rem;font-weight:800}
+.stat-card .label{font-size:.72rem;color:var(--muted);margin-top:.2rem}
+.stat-card.kb_miss{border-left-color:var(--accent);.num{color:var(--accent)}}
+.stat-card.ai_error{border-left-color:var(--warn);.num{color:var(--warn)}}
+.stat-card.ocr_fail{border-left-color:#9B7EC4;.num{color:#9B7EC4}}
+.stat-card.total{border-left-color:var(--accent2);.num{color:var(--accent2)}}
+
+/* Filters */
+.filters{display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap}
+.filters button{
+  border:1px solid var(--rule);border-radius:20px;padding:.3rem .9rem;
+  font-size:.78rem;cursor:pointer;background:var(--bg);color:var(--ink);
+  font-family:inherit;transition:all .15s;
+}
+.filters button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.filters button:active{opacity:.8}
+
+/* Actions */
+.actions{margin-bottom:1rem;display:flex;gap:.5rem;flex-wrap:wrap}
+.actions button{
+  border:1px solid var(--rule);border-radius:8px;padding:.4rem .9rem;
+  font-size:.78rem;cursor:pointer;background:var(--bg);color:var(--ink);
+  font-family:inherit;transition:all .15s;
+}
+.actions button.danger{color:var(--warn);border-color:var(--warn)}
+.actions button:active{opacity:.8}
+
+/* Issue list */
+.issue-list{display:flex;flex-direction:column;gap:.6rem}
+.issue-card{
+  background:var(--bg2);border-radius:12px;padding:1rem 1.2rem;
+  border-left:4px solid var(--rule);animation:in .2s;
+  position:relative;
+}
+@keyframes in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.issue-card.resolved{opacity:.5}
+.issue-card.kb_miss{border-left-color:var(--accent)}
+.issue-card.ai_error{border-left-color:var(--warn)}
+.issue-card.ocr_fail{border-left-color:#9B7EC4}
+.issue-card.safety_block{border-left-color:#E8836B}
+.issue-card .badge{
+  display:inline-block;padding:1px 8px;border-radius:10px;font-size:.66rem;font-weight:700;margin-bottom:.4rem;
+}
+.issue-card .badge.kb_miss{background:rgba(232,131,107,.12);color:var(--accent)}
+.issue-card .badge.ai_error{background:rgba(217,74,58,.12);color:var(--warn)}
+.issue-card .badge.ocr_fail{background:rgba(155,126,196,.12);color:#7B5EA7}
+.issue-card .badge.safety_block{background:rgba(232,131,107,.12);color:var(--accent)}
+.issue-card .time{font-size:.72rem;color:var(--muted);margin-bottom:.4rem}
+.issue-card .query{font-size:.88rem;margin-bottom:.3rem}
+.issue-card .query strong{background:var(--bg);padding:1px 6px;border-radius:4px}
+.issue-card .detail{font-size:.78rem;color:var(--muted)}
+.issue-card .resolve-btn{
+  position:absolute;top:.8rem;right:1rem;
+  border:1px solid var(--rule);border-radius:15px;padding:2px 10px;
+  font-size:.68rem;cursor:pointer;background:var(--bg);color:var(--muted);
+  font-family:inherit;transition:all .15s;
+}
+.issue-card .resolve-btn:hover{background:var(--accent2);color:#fff;border-color:var(--accent2)}
+
+.empty{text-align:center;padding:3rem 1rem;color:var(--muted)}
+.empty .icon{font-size:3rem;margin-bottom:1rem}
+
+/* Export */
+.export-panel{
+  background:var(--bg2);border-radius:12px;padding:1rem 1.2rem;margin-top:1.5rem;
+  display:none;
+}
+.export-panel.show{display:block}
+.export-panel textarea{
+  width:100%;min-height:200px;border:1px solid var(--rule);border-radius:8px;
+  padding:.6rem .8rem;font-size:.78rem;font-family:Consolas,monospace;
+  background:var(--bg);color:var(--ink);resize:vertical;
+}
+footer{margin-top:2.5rem;text-align:center;font-size:.75rem;color:var(--muted)}
+</style>
+</head>
+<body>
+
+<h1>📋 错题集</h1>
+<p class="sub">育儿AI问答助手 · 知识空白 / 异常记录 · 数据存储于浏览器本地</p>
+
+<div class="stats" id="stats">
+  <div class="stat-card total"><div class="num" id="numTotal">0</div><div class="label">总计</div></div>
+  <div class="stat-card kb_miss"><div class="num" id="numMiss">0</div><div class="label">知识空白</div></div>
+  <div class="stat-card ai_error"><div class="num" id="numError">0</div><div class="label">AI异常</div></div>
+  <div class="stat-card ocr_fail"><div class="num" id="numOcr">0</div><div class="label">OCR失败</div></div>
+</div>
+
+<div class="filters">
+  <button class="active" data-filter="all">全部</button>
+  <button data-filter="kb_miss">🔍 知识空白</button>
+  <button data-filter="ai_error">⚠️ AI异常</button>
+  <button data-filter="ocr_fail">📷 OCR失败</button>
+  <button data-filter="safety_block">🚨 安全拦截</button>
+</div>
+
+<div class="actions">
+  <button onclick="showExport()">📥 导出为JSON</button>
+  <button class="danger" onclick="clearAll()">🗑 清空全部记录</button>
+  <button onclick="loadSimulated()">🎭 加载模拟数据（演示用）</button>
+</div>
+
+<div id="issueList" class="issue-list"></div>
+
+<div class="export-panel" id="exportPanel">
+  <p style="font-size:.8rem;margin-bottom:.5rem">复制以下JSON，可导入到其他工具分析：</p>
+  <textarea id="exportArea" readonly></textarea>
+  <button onclick="closeExport()" style="margin-top:.5rem">关闭</button>
+</div>
+
+<footer>
+  数据仅存储在浏览器 localStorage 中 · 与部署的应用共享同一存储
+</footer>
+
+<script>
+const CATEGORY_NAMES = {
+  kb_miss: '知识空白',
+  ai_error: 'AI异常',
+  ocr_fail: 'OCR失败',
+  safety_block: '安全拦截',
+  other: '其他'
+};
+
+function loadIssues(){
+  try{
+    return JSON.parse(localStorage.getItem('parenting_issues_log')||'[]');
+  }catch(e){return[];}
+}
+
+function saveIssues(issues){
+  localStorage.setItem('parenting_issues_log', JSON.stringify(issues));
+}
+
+let issues = loadIssues();
+let filter = 'all';
+
+function renderStats(){
+  const all = issues;
+  document.getElementById('numTotal').textContent = all.length;
+  document.getElementById('numMiss').textContent = all.filter(i=>i.category==='kb_miss').length;
+  document.getElementById('numError').textContent = all.filter(i=>i.category==='ai_error').length;
+  document.getElementById('numOcr').textContent = all.filter(i=>i.category==='ocr_fail').length;
+}
+
+function renderList(){
+  const list = document.getElementById('issueList');
+  let filtered = filter==='all'?issues:issues.filter(i=>i.category===filter);
+  // 最新的排前面
+  filtered = [...filtered].reverse();
+
+  if(filtered.length===0){
+    list.innerHTML = `<div class="empty"><div class="icon">📭</div><p>暂无记录</p><p style="font-size:.78rem;margin-top:.3rem">使用育儿AI问答助手遇到知识盲区或异常时，会自动记录到这里</p></div>`;
+    return;
+  }
+
+  list.innerHTML = filtered.map(i=>`
+    <div class="issue-card ${i.category} ${i.resolved?'resolved':''}">
+      <span class="badge ${i.category}">${CATEGORY_NAMES[i.category]||i.category}</span>
+      <div class="time">${i.time}</div>
+      <div class="query"><strong>${escapeHtml(i.query)}</strong></div>
+      ${i.detail?`<div class="detail">${escapeHtml(i.detail)}</div>`:''}
+      <button class="resolve-btn" onclick="toggleResolved(${i.id})">${i.resolved?'↩ 标记未解决':'✓ 标记解决'}</button>
+    </div>
+  `).join('');
+}
+
+function escapeHtml(s){
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function toggleResolved(id){
+  const idx = issues.findIndex(i=>i.id===id);
+  if(idx>=0){
+    issues[idx].resolved = !issues[idx].resolved;
+    saveIssues(issues);
+    renderStats();
+    renderList();
+  }
+}
+
+function clearAll(){
+  if(confirm('确定要清空所有错题记录吗？此操作不可恢复。')){
+    issues=[];
+    saveIssues(issues);
+    renderStats();
+    renderList();
+  }
+}
+
+function showExport(){
+  const panel = document.getElementById('exportPanel');
+  panel.classList.add('show');
+  document.getElementById('exportArea').value = JSON.stringify(issues,null,2);
+}
+
+function closeExport(){
+  document.getElementById('exportPanel').classList.remove('show');
+}
+
+function loadSimulated(){
+  const sample = [
+    {id:Date.now()-5000,time:'2026-07-28 10:15:32',category:'kb_miss',query:'宝宝出牙顺序不正常怎么办',detail:'官方指南和书籍均无匹配结果',resolved:false},
+    {id:Date.now()-4000,time:'2026-07-28 14:22:10',category:'ai_error',query:'孩子在学校被欺负怎么处理',detail:'API调用失败: 429 Too Many Requests',resolved:false},
+    {id:Date.now()-3000,time:'2026-07-29 09:08:44',category:'ocr_fail',query:'OCR识别',detail:'图片中未检测到文字',resolved:false},
+    {id:Date.now()-2000,time:'2026-07-29 11:30:15',category:'kb_miss',query:'肠套叠的早期症状有哪些',detail:'官方指南和书籍均无匹配结果',resolved:true},
+    {id:Date.now()-1000,time:'2026-07-29 15:45:01',category:'ocr_fail',query:'OCR识别',detail:'OCR引擎异常',resolved:false},
+  ];
+  issues = [...issues, ...sample];
+  saveIssues(issues);
+  renderStats();
+  renderList();
+}
+
+// Filter buttons
+document.querySelectorAll('.filters button').forEach(btn=>{
+  btn.addEventListener('click',function(){
+    document.querySelectorAll('.filters button').forEach(b=>b.classList.remove('active'));
+    this.classList.add('active');
+    filter = this.dataset.filter;
+    renderList();
+  });
+});
+
+// Initial render
+renderStats();
+renderList();
+
+// 每秒刷新一次（如果从主应用切过来会有新数据）
+setInterval(()=>{
+  const newIssues = loadIssues();
+  if(JSON.stringify(newIssues)!==JSON.stringify(issues)){
+    issues = newIssues;
+    renderStats();
+    renderList();
+  }
+},2000);
+</script>
+</body>
+</html>

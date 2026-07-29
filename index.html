@@ -281,7 +281,7 @@ body{
 
 <div class="input-area">
   <textarea id="userInput" rows="1" placeholder="输入你的育儿问题..." autofocus></textarea>
-  <button class="voice-btn" id="voiceBtn" onclick="toggleVoice()" title="语音输入"><span class="mic-icon">🎤</span></button>
+  <button class="voice-btn" id="voiceBtn" title="语音输入"><span class="mic-icon">🎤</span></button>
   <button id="sendBtn" onclick="sendMessage()">➤</button>
 </div>
 
@@ -337,6 +337,9 @@ messagesDiv.addEventListener('click',function(e){
   const el = document.getElementById(targetId);
   if(el) speakText(el.textContent, btn);
 });
+
+// 语音按钮事件绑定
+document.getElementById('voiceBtn').addEventListener('click', toggleVoice);
 
 // ==================== 知识库引擎 ====================
 let KB = null;
@@ -635,24 +638,12 @@ let isProcessing = false;
 // ==================== 语音输入 ====================
 let recognition = null;
 
-function getSpeechRecognition(){
-  if(recognition) return recognition;
+function toggleVoice(){
+  // 直接在此函数内创建 recognition 实例，确保在用户手势中完成
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if(!SpeechRecognition){
-    return null; // 浏览器不支持
-  }
-  recognition = new SpeechRecognition();
-  recognition.lang = 'zh-CN';
-  recognition.interimResults = true; // 实时显示中间结果
-  recognition.continuous = false;    // 说完一句自动结束
-  recognition.maxAlternatives = 1;
-  return recognition;
-}
-
-function toggleVoice(){
-  const rec = getSpeechRecognition();
-  if(!rec){
-    alert('你的浏览器不支持语音输入。请在 Chrome 或 Safari 中打开。');
+    userInput.placeholder = '⚠ 当前浏览器不支持语音输入，请用 Chrome';
+    setTimeout(()=>{if(userInput.placeholder.startsWith('⚠'))userInput.placeholder='输入你的育儿问题...';},3000);
     return;
   }
 
@@ -661,9 +652,16 @@ function toggleVoice(){
 
   // 停止
   if(btn.classList.contains('listening')){
-    rec.stop();
+    if(recognition) recognition.stop();
     return;
   }
+
+  // 创建新实例（确保在用户手势中）
+  recognition = new SpeechRecognition();
+  recognition.lang = 'zh-CN';
+  recognition.interimResults = true;
+  recognition.continuous = false;
+  recognition.maxAlternatives = 1;
 
   // 开始
   btn.classList.add('listening');
@@ -672,7 +670,7 @@ function toggleVoice(){
   userInput.value = '';
   let finalTranscript = '';
 
-  rec.onresult = function(event){
+  recognition.onresult = function(event){
     let interim = '';
     for(let i=event.resultIndex;i<event.results.length;i++){
       const transcript = event.results[i][0].transcript;
@@ -682,38 +680,37 @@ function toggleVoice(){
         interim += transcript;
       }
     }
-    // 实时显示：最终结果 + 中间结果
     userInput.value = finalTranscript + interim;
     userInput.style.height = '40px';
     userInput.style.height = Math.min(userInput.scrollHeight,120)+'px';
   };
 
-  rec.onerror = function(event){
+  recognition.onerror = function(event){
     console.log('Speech error:',event.error);
     stopListening();
     if(event.error==='not-allowed'){
-      userInput.placeholder = '麦克风权限被拒绝，请检查浏览器设置';
+      userInput.placeholder = '🎤 请关闭其他应用的悬浮窗/气泡，然后重试';
     } else if(event.error==='no-speech'){
-      userInput.placeholder = '未检测到语音，请重试';
+      userInput.placeholder = '未检测到语音，点击 🎤 重试';
     } else {
       userInput.placeholder = '语音识别出错，点击 🎤 重试';
     }
   };
 
-  rec.onend = function(){
-    // 如果有内容且不在处理中，自动发送
+  recognition.onend = function(){
     const finalText = userInput.value.trim();
     if(finalText && !isProcessing){
-      setTimeout(()=>{
-        if(userInput.value.trim()===finalText){
-          sendMessage();
-        }
-      },500);
+      setTimeout(()=>{ if(userInput.value.trim()===finalText) sendMessage(); },500);
     }
     stopListening();
   };
 
-  rec.start();
+  try{
+    recognition.start();
+  }catch(e){
+    stopListening();
+    userInput.placeholder = '🎤 语音启动失败，请重试或手动输入';
+  }
 }
 
 function stopListening(){

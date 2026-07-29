@@ -325,7 +325,7 @@ body{
 
 <div class="input-area">
   <button class="cam-btn" id="camBtn" title="拍照/上传图片OCR"><span>📷</span></button>
-  <input type="file" id="fileInput" accept="image/*" capture="environment" style="display:none" onchange="handleImageFile(event)">
+  <input type="file" id="fileInput" accept="image/*" style="display:none" onchange="handleImageFile(event)">
   <textarea id="userInput" rows="1" placeholder="输入你的育儿问题..." autofocus></textarea>
   <button class="voice-btn" id="voiceBtn" title="语音输入"><span class="mic-icon">🎤</span></button>
   <button id="sendBtn" onclick="sendMessage()">➤</button>
@@ -443,35 +443,34 @@ function bm25Score(query,doc){
   return score*(doc.weight||1);
 }
 
-function search(query,topK=10){
-  if(!KB) return [];
-  const results=[];
-  for(const doc of KB.documents){
-    const s=bm25Score(query,doc);
-    if(s>0) results.push({...doc,score:s});
-  }
-  results.sort((a,b)=>b.score-a.score);
-  if(results.length===0){
-    const qTokens=new Set(tokenize(query));
-    for(const doc of KB.documents){
-      let m=0;
-      for(const t of qTokens){if(doc.text.includes(t)) m++;}
-      if(m>0) results.push({...doc,score:m});
+function searchDual(query, topK=5){
+  // 双路独立检索：官方指南和书籍分开，无权重差异
+  if(!KB) return {official:[],books:[]};
+  const all=KB.documents;
+  
+  function rankDocs(docs){
+    const results=[];
+    for(const doc of docs){
+      const s=bm25Score(query,doc);
+      if(s>0) results.push({...doc,score:s});
     }
     results.sort((a,b)=>b.score-a.score);
+    if(results.length===0){
+      const qTokens=new Set(tokenize(query));
+      for(const doc of docs){
+        let m=0;
+        for(const t of qTokens){if(doc.text.includes(t)) m++;}
+        if(m>0) results.push({...doc,score:m});
+      }
+      results.sort((a,b)=>b.score-a.score);
+    }
+    return results.slice(0,topK);
   }
 
-  // 多样性重排：确保L2书籍不被L1全部挤占，混合L1/L2来源
-  const l1=results.filter(r=>r.source_level==='L1');
-  const l2=results.filter(r=>r.source_level==='L2');
-  const merged=[];
-  let i=0,j=0;
-  while(merged.length<topK && (i<l1.length||j<l2.length)){
-    if(i<l1.length) merged.push(l1[i++]);
-    if(j<l2.length && merged.length<topK) merged.push(l2[j++]);
-    if(i<l1.length && merged.length<topK) merged.push(l1[i++]);
-  }
-  return merged.slice(0,topK);
+  return {
+    official: rankDocs(all.filter(d=>d.source_level==='L1')),
+    books:    rankDocs(all.filter(d=>d.source_level==='L2'))
+  };
 }
 
 // ==================== 上下文缓存 ====================
@@ -646,22 +645,29 @@ async function callAI(messages, stream=false){
 }
 
 // ==================== 格式化知识片段 ====================
-function formatKbContext(results){
-  return results.map((r,i)=>{
-    const level = r.source_level==='L1'?'【国家卫健委/官方指南】':'【'+r.title+'】';
-    return `[知识片段${i+1}] ${level}\n${r.heading?('主题: '+r.heading+'\n'):''}${r.text.substring(0,600)}`;
-  }).join('\n\n---\n\n');
+function formatKbContext(dualResults){
+  let ctx='';
+  if(dualResults.official.length>0){
+    ctx+='【官方指南】\n';
+    ctx+=dualResults.official.map((r,i)=>`[官方${i+1}] 主题: ${r.heading||'相关内容'}\n${r.text.substring(0,600)}`).join('\n\n---\n\n');
+  }
+  if(dualResults.books.length>0){
+    ctx+='\n\n=====\n\n【育儿书籍】\n';
+    ctx+=dualResults.books.map((r,i)=>`[书籍${i+1}] 《${r.title||'未知'}》\n${r.heading?('主题: '+r.heading+'\n'):''}${r.text.substring(0,600)}`).join('\n\n---\n\n');
+  }
+  return ctx;
 }
 
-function extractSources(results){
-  const seen=new Set();
+function extractSources(dualResults){
   const sources=[];
-  for(const r of results.slice(0,5)){
-    const key = r.source_level+'::'+r.title;
-    if(!seen.has(key)&&seen.size<5){
-      seen.add(key);
-      sources.push({level:r.source_level,title:r.title});
-    }
+  const seen=new Set();
+  for(const r of dualResults.official.slice(0,3)){
+    const key='L1::'+r.title;
+    if(!seen.has(key)){seen.add(key);sources.push({level:'L1',title:r.title||r.heading||'官方指南'});}
+  }
+  for(const r of dualResults.books.slice(0,3)){
+    const key='L2::'+r.title;
+    if(!seen.has(key)&&seen.size<6){seen.add(key);sources.push({level:'L2',title:r.title||r.heading||'育儿书籍'});}
   }
   return sources;
 }
@@ -944,23 +950,24 @@ async function sendMessage(){
     pendingClarification = null;
   }
 
-  // 检索知识库
-  const results = search(finalQuery, 8);
+  // 双路独立检索
+  const dual = searchDual(finalQuery, 5);
+  const hasAny = dual.official.length>0 || dual.books.length>0;
   addToCtx('user', finalQuery);
 
   // 判断使用哪种模式
   const cfg = getConfig();
   const useAI = cfg.mode!=='kb-only';
 
-  if(useAI && results.length>0){
+  if(useAI && hasAny){
     // === AI模式: 知识库 + LLM ===
     addTyping();
 
-    const kbContext = formatKbContext(results);
-    const sources = extractSources(results);
+    const kbContext = formatKbContext(dual);
+    const sources = extractSources(dual);
 
     // 构建消息
-    const userMsg = `用户问题: ${finalQuery}\n\n以下是从知识库中检索到的相关知识片段，请基于这些信息回答：\n\n${kbContext}\n\n请用温暖、易懂的方式解读这些知识，给用户一个清晰、可操作的回答。记得标注来源。`;
+    const userMsg = `用户问题: ${finalQuery}\n\n以下是从知识库中检索到的相关知识片段，请基于这些信息回答。注意：第一组分自官方指南，第二分组来自育儿书籍，两个来源同等重要，请综合引用：\n\n${kbContext}\n\n请用温暖、易懂的方式解读这些知识，给用户一个清晰、可操作的回答。记得标注来源。`;
 
     const ctxMessages = [...conversationCtx.slice(0,-1), {role:'user',content:userMsg}];
 
@@ -969,8 +976,7 @@ async function sendMessage(){
 
       if(aiResp.error){
         removeTyping();
-        // AI失败，回退到纯知识库模式
-        const fallback = formatFallbackAnswer(results);
+        const fallback = formatFallbackAnswer(dual);
         addToCtx('assistant', fallback.text);
         addMessage('bot', {text:fallback.text,aiGenerated:false}, fallback.sources);
       } else {
@@ -982,14 +988,14 @@ async function sendMessage(){
       }
     }catch(e){
       removeTyping();
-      const fallback = formatFallbackAnswer(results);
+      const fallback = formatFallbackAnswer(dual);
       addToCtx('assistant', fallback.text);
       addMessage('bot', {text:fallback.text,aiGenerated:false}, fallback.sources);
     }
   } else {
     // === 纯知识库模式（无AI） ===
-    const answer = formatFallbackAnswer(results);
-    if(results.length>0) addToCtx('assistant', answer.text);
+    const answer = formatFallbackAnswer(dual);
+    if(hasAny) addToCtx('assistant', answer.text);
     addMessage('bot', {text:answer.text,aiGenerated:false}, answer.sources);
   }
 
@@ -999,48 +1005,50 @@ async function sendMessage(){
 }
 
 // ==================== 纯知识库回退回答 ====================
-function formatFallbackAnswer(results){
-  if(results.length===0){
-    return {
-      text:'抱歉，我在知识库中没有找到相关的内容 😔\n\n你可以换个方式描述问题，或者告诉我更具体的情况。',
-      sources:[]
-    };
+function formatFallbackAnswer(dual){
+  const hasO = dual.official.length>0;
+  const hasB = dual.books.length>0;
+  if(!hasO && !hasB){
+    return {text:'抱歉，我在知识库中没有找到相关的内容 😔\n\n你可以换个方式描述问题，或者告诉我更具体的情况。',sources:[]};
   }
 
-  const top = results.slice(0,4);
-  const sources=extractSources(top);
-  let text='**根据知识库检索结果：**\n\n';
+  const sources=extractSources(dual);
+  let text='**📋 知识库双路检索结果：**\n\n';
 
-  const l1=top.filter(r=>r.source_level==='L1');
-  const best=(l1.length>0?l1:top)[0];
-
-  // 核心结论
-  const lines=best.text.split('\n');
-  const keyLines=[];
-  for(const l of lines){
-    const t=l.trim();
-    if(!t||t.startsWith('#')||t.startsWith('>')) continue;
-    if(t.startsWith('---')) break;
-    if(t.includes('**')||t.startsWith('-')||t.startsWith('|')){
-      keyLines.push(t.replace(/\*\*/g,'').replace(/\|/g,' '));
-    }
-    if(keyLines.length>=6) break;
-  }
-  text+=keyLines.slice(0,4).join('\n')+'\n\n';
-
-  // 补充要点
-  for(const r of top.slice(1,3)){
-    if(r.heading){
-      text+='**'+r.heading+'**\n';
-    }
-    const pts = r.text.split('\n').filter(l=>{
+  function extractLines(doc,maxLines){
+    const lines=doc.text.split('\n');
+    const out=[];
+    for(const l of lines){
       const t=l.trim();
-      return (t.startsWith('-')||t.includes('**'))&&t.length>15;
-    }).slice(0,2);
-    if(pts.length>0) text+=pts.map(p=>'· '+p.trim().replace(/^-\s*/,'').replace(/\*\*/g,'')).join('\n')+'\n\n';
+      if(!t||t.startsWith('#')||t.startsWith('>')) continue;
+      if(t.startsWith('---')) break;
+      if(t.includes('**')||t.startsWith('-')||t.startsWith('|')){
+        out.push(t.replace(/\*\*/g,'').replace(/\|/g,' '));
+      }
+      if(out.length>=maxLines) break;
+    }
+    return out;
   }
 
-  text+='*以上内容来自知识库检索，仅供参考。如情况持续或加重，请及时就医。*';
+  if(hasO){
+    text+='### 🏥 官方指南\n';
+    for(const r of dual.official.slice(0,2)){
+      text+=`**${r.heading||'相关内容'}**\n`;
+      const pts=extractLines(r,3);
+      if(pts.length>0) text+=pts.map(p=>'· '+p).join('\n')+'\n';
+    }
+    text+='\n';
+  }
+  if(hasB){
+    text+='### 📚 育儿书籍\n';
+    for(const r of dual.books.slice(0,2)){
+      text+=`**《${r.title||'未知'}》${r.heading?' > '+r.heading:''}**\n`;
+      const pts=extractLines(r,3);
+      if(pts.length>0) text+=pts.map(p=>'· '+p).join('\n')+'\n';
+    }
+  }
+
+  text+='\n*以上内容来自知识库双路检索，仅供参考。如情况持续或加重，请及时就医。*';
   return {text,sources};
 }
 

@@ -460,7 +460,18 @@ function search(query,topK=10){
     }
     results.sort((a,b)=>b.score-a.score);
   }
-  return results.slice(0,topK);
+
+  // 多样性重排：确保L2书籍不被L1全部挤占，混合L1/L2来源
+  const l1=results.filter(r=>r.source_level==='L1');
+  const l2=results.filter(r=>r.source_level==='L2');
+  const merged=[];
+  let i=0,j=0;
+  while(merged.length<topK && (i<l1.length||j<l2.length)){
+    if(i<l1.length) merged.push(l1[i++]);
+    if(j<l2.length && merged.length<topK) merged.push(l2[j++]);
+    if(i<l1.length && merged.length<topK) merged.push(l1[i++]);
+  }
+  return merged.slice(0,topK);
 }
 
 // ==================== 上下文缓存 ====================
